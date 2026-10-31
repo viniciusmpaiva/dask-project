@@ -11,6 +11,7 @@ from pathlib import Path
 
 import dask
 import dask.dataframe as dd
+import numpy as np
 import pandas as pd
 import psutil
 from distributed import Client, LocalCluster, get_task_stream
@@ -45,6 +46,22 @@ def dask_graph(directory, partitions):
     return frames, merged
 
 
+def heavy_assign(df):
+    # Operacoes vetorizadas por linha. Pandas single-thread (numexpr desabilitado em trial.execute); dask paraleliza por particao.
+    return df.assign(bucket=df['chave'] % 1024,
+                     heavy1=np.log1p(np.abs(df['chave'])),
+                     heavy2=np.sqrt(np.abs(df['chave']) + 1.0),
+                     heavy3=np.sin(df['chave'] % 10000))
+
+
+def heavy_agg(df):
+    return heavy_assign(df).groupby('bucket').agg({
+        'heavy1': ['sum', 'mean', 'std'],
+        'heavy2': ['sum', 'mean', 'std'],
+        'heavy3': ['sum', 'mean', 'std'],
+        'chave':  ['count', 'min', 'max']})
+
+
 def workload(spec):
     variant = spec.get('workload', 'merge')
     if spec['approach'] == 'pandas':
@@ -53,14 +70,17 @@ def workload(spec):
         merged = a.merge(b, on='chave', how='inner', sort=False)
         if variant == 'merge':
             return merged
-        # merge_groupby adiciona trabalho pos-merge: pandas executa serial, dask em paralelo por particao
-        merged = merged.assign(bucket=merged['chave'] % 1024)
-        return merged.groupby('bucket').agg({'chave': ['count', 'min', 'max']})
+        if variant == 'merge_groupby':
+            # merge_groupby adiciona trabalho pos-merge: pandas executa serial, dask em paralelo por particao
+            return merged.assign(bucket=merged['chave'] % 1024).groupby('bucket').agg({'chave': ['count', 'min', 'max']})
+        # merge_heavy: compute por linha mais pesado -> empurra break-even para volume menor
+        return heavy_agg(merged)
     _, merged = dask_graph(spec['dataset']['directory'], spec['partitions'])
     if variant == 'merge':
         return merged.compute()
-    merged = merged.assign(bucket=merged['chave'] % 1024)
-    return merged.groupby('bucket').agg({'chave': ['count', 'min', 'max']}).compute()
+    if variant == 'merge_groupby':
+        return merged.assign(bucket=merged['chave'] % 1024).groupby('bucket').agg({'chave': ['count', 'min', 'max']}).compute()
+    return heavy_agg(merged).compute()
 
 
 def execute(spec_path):

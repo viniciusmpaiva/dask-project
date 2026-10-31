@@ -73,8 +73,8 @@ def run_config(config, experiment_id, allow_host=False):
     for s in config['scenarios']:
         if s['approach'] not in ('pandas', 'dask') or s['volume'] not in config['volumes']:
             raise ValueError('Invalid scenario')
-        if s.get('workload', 'merge') not in ('merge', 'merge_groupby'):
-            raise ValueError('workload must be one of merge, merge_groupby')
+        if s.get('workload', 'merge') not in ('merge', 'merge_groupby', 'merge_heavy'):
+            raise ValueError('workload must be one of merge, merge_groupby, merge_heavy')
         if s['approach'] == 'dask' and (
                 s['workers'] not in (1, 2, 4, 8, 16) or
                 s['partitions'] not in (1, 2, 4, 8, 16, 32, 64)):
