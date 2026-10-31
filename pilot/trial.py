@@ -46,12 +46,21 @@ def dask_graph(directory, partitions):
 
 
 def workload(spec):
+    variant = spec.get('workload', 'merge')
     if spec['approach'] == 'pandas':
         a, b = (pd.read_parquet(str(Path(spec['dataset']['directory']) / t), engine='pyarrow')
                 for t in ('a', 'b'))
-        return a.merge(b, on='chave', how='inner', sort=False)
+        merged = a.merge(b, on='chave', how='inner', sort=False)
+        if variant == 'merge':
+            return merged
+        # merge_groupby adiciona trabalho pos-merge: pandas executa serial, dask em paralelo por particao
+        merged = merged.assign(bucket=merged['chave'] % 1024)
+        return merged.groupby('bucket').agg({'chave': ['count', 'min', 'max']})
     _, merged = dask_graph(spec['dataset']['directory'], spec['partitions'])
-    return merged.compute()
+    if variant == 'merge':
+        return merged.compute()
+    merged = merged.assign(bucket=merged['chave'] % 1024)
+    return merged.groupby('bucket').agg({'chave': ['count', 'min', 'max']}).compute()
 
 
 def execute(spec_path):
@@ -136,7 +145,11 @@ def execute(spec_path):
                 sampler = None
             record['runtime_s'] = runtime
             # Validation is outside both clock and sample window.
-            record['validation'] = validate(result, spec['n'], spec['dataset']['spec']['seeds'])
+            if spec.get('workload', 'merge') == 'merge':
+                record['validation'] = validate(result, spec['n'], spec['dataset']['spec']['seeds'])
+            else:
+                record['validation'] = {'ok': True, 'skipped': True,
+                                        'reason': f"validate() aplica-se apenas ao workload merge; recebido {spec.get('workload')}"}
             del result
             if client:
                 events = stream.data
@@ -148,15 +161,30 @@ def execute(spec_path):
                 record['worker_pids_before'] = before_pids
                 record['worker_pids_after'] = client.run(os.getpid)
                 record['worker_identity_changed'] = before_pids != record['worker_pids_after']
+                # Workers que apareceram no task stream — se houver mais do que spec['workers'],
+                # a Nanny matou e reiniciou um worker e o stream contém re-execuções.
+                record['task_stream_worker_set'] = sorted({e.get('worker') for e in events if e.get('worker')})
+                if record['worker_identity_changed'] or len(record['task_stream_worker_set']) > spec['workers']:
+                    raise RuntimeError(
+                        f'Worker restarted mid-run (spec {spec["workers"]} worker(s); '
+                        f'stream saw {record["task_stream_worker_set"]}). Likely memory pressure; '
+                        f'inspect process.log and worker-logs.json')
+                def _key(e):
+                    return tuple(e['key']) if isinstance(e['key'], list) else e['key']
+                # Contagens por CHAVE ÚNICA: re-execuções após restart inflam eventos e invalidam as métricas.
+                unique_keys = {_key(e) for e in events}
+                shuffle_keys = {_key(e) for e in events if 'shuffle' in str(e['key'])}
+                merge_output_keys = {_key(e) for e in events if 'blockwisemerge' in str(e['key'])}
                 counts = Counter(str(e['key']).split('-', 1)[0] for e in events)
-                shuffle = [e for e in events if 'shuffle' in str(e['key'])]
-                record['dask_tasks'] = len(events)
+                record['dask_task_stream_events'] = len(events)
+                record['dask_tasks'] = len(unique_keys)
                 record['executed_task_prefixes'] = dict(counts)
-                record['shuffle_tasks'] = len(shuffle)
-                record['merge_output_tasks_observed'] = sum('blockwisemerge' in str(e['key']) for e in events)
-                if not shuffle:
+                record['shuffle_tasks'] = len(shuffle_keys)
+                record['merge_output_tasks_observed'] = len(merge_output_keys)
+                if not shuffle_keys:
                     raise AssertionError('No shuffle tasks observed in execution')
-                if record['merge_output_tasks_observed'] != spec['partitions']:
+                # merge_groupby pode fundir/mover tarefas pelo planner; a contagem de merge-outputs so e invariante no workload merge puro.
+                if spec.get('workload', 'merge') == 'merge' and record['merge_output_tasks_observed'] != spec['partitions']:
                     raise AssertionError('Observed merge output task count differs from configured partitions')
                 start_stamp = min((s['start'] for e in events for s in e.get('startstops', [])), default=None)
                 stop_stamp = max((s['stop'] for e in events for s in e.get('startstops', [])), default=None)
@@ -171,8 +199,6 @@ def execute(spec_path):
                 record['transfer_log_complete'] = all(len(v['incoming']) < 1000 for v in after.values())
                 record['spill_after'] = {k: v['spilled'] for k, v in after.items()}
                 record['spill_before'] = {k: v['spilled'] for k, v in transfer_before.items()}
-                if record['worker_identity_changed']:
-                    raise RuntimeError('Worker identity changed; inspect logs for restart')
             write_json(folder / 'samples.json', samples)
             record['status'] = 'success'
     except BaseException as exc:

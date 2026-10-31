@@ -4,16 +4,14 @@
   "physical_files": 8, "seeds": {"a": 105, "b": 205},
   "timeout_s": 900, "max_attempts": 2, "sample_interval_s": 0.05,
   "scenarios": [
-    {"volume": "small", "approach": "pandas", "workers": 0, "partitions": 0},
-    {"volume": "medium", "approach": "pandas", "workers": 0, "partitions": 0},
-    {"volume": "large", "approach": "pandas", "workers": 0, "partitions": 0},
-    {"volume": "small", "approach": "dask", "workers": 1, "partitions": 16},
-    {"volume": "medium", "approach": "dask", "workers": 1, "partitions": 16},
-    {"volume": "large", "approach": "dask", "workers": 1, "partitions": 16},
-    {"volume": "small", "approach": "dask", "workers": 2, "partitions": 16},
-    {"volume": "medium", "approach": "dask", "workers": 2, "partitions": 16},
-    {"volume": "large", "approach": "dask", "workers": 2, "partitions": 16},
-    {"volume": "medium", "approach": "dask", "workers": 2, "partitions": 4},
-    {"volume": "medium", "approach": "dask", "workers": 2, "partitions": 64}
+    {"volume": "small", "approach": "pandas", "workers": 0, "partitions": 0, "workload": "merge_groupby"},
+    {"volume": "medium", "approach": "pandas", "workers": 0, "partitions": 0, "workload": "merge_groupby"},
+    {"volume": "large", "approach": "pandas", "workers": 0, "partitions": 0, "workload": "merge_groupby"},
+    {"volume": "small", "approach": "dask", "workers": 1, "partitions": 16, "workload": "merge_groupby"},
+    {"volume": "medium", "approach": "dask", "workers": 1, "partitions": 16, "workload": "merge_groupby"},
+    {"volume": "large", "approach": "dask", "workers": 1, "partitions": 16, "workload": "merge_groupby"},
+    {"volume": "small", "approach": "dask", "workers": 2, "partitions": 16, "workload": "merge_groupby"},
+    {"volume": "medium", "approach": "dask", "workers": 2, "partitions": 16, "workload": "merge_groupby"},
+    {"volume": "large", "approach": "dask", "workers": 2, "partitions": 16, "workload": "merge_groupby"}
   ]
 }

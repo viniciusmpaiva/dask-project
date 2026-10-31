@@ -35,7 +35,7 @@ def analyze(folder):
         attempts = [r for r in records if scenario_key(r) == key]
         success = [r for r in valid if scenario_key(r) == key]
         times = [r['runtime_s'] for r in success]
-        row = {**s, 'n': config['volumes'][s['volume']], 'configuration': key,
+        row = {**s, 'workload': s.get('workload', 'merge'), 'n': config['volumes'][s['volume']], 'configuration': key,
                'successes': len(success), 'failures': len(attempts) - len(success),
                'planned': config['blocks'], 'cp3_complete': len(success) >= 5 and config['mode'] in ('pilot', 'scenario'),
                'collection_complete': len(success) == config['blocks'],
@@ -46,7 +46,8 @@ def analyze(folder):
             pairs = []
             for r in success:
                 baseline = next((b for b in valid if b['volume'] == s['volume'] and
-                                 b['block'] == r['block'] and b['approach'] == 'pandas'), None)
+                                 b['block'] == r['block'] and b['approach'] == 'pandas' and
+                                 b.get('workload', 'merge') == s.get('workload', 'merge')), None)
                 if baseline:
                     pairs.append((baseline['runtime_s'], r['runtime_s']))
             if pairs:
@@ -75,8 +76,10 @@ def analyze(folder):
     for col in ('mean_runtime_s', 'sample_std_runtime_s', 'speedup', 'relative_efficiency'):
         display[col] = display[col].map(lambda value: 'indisponível' if pd.isna(value) else f'{value:.5g}')
     display['configuration'] = [
-        f"Pandas · {r['volume']}" if r['approach'] == 'pandas' else
-        f"Dask · {r['volume']} · {r['workers']} worker(s) · {r['partitions']} partições" for r in rows]
+        (f"Pandas · {r['volume']}" if r['approach'] == 'pandas' else
+         f"Dask · {r['volume']} · {r['workers']} worker(s) · {r['partitions']} partições") +
+        ('' if r.get('workload', 'merge') == 'merge' else f" · {r['workload']}")
+        for r in rows]
     display = display.rename(columns={'configuration': 'Configuração', 'n': 'Linhas/tabela',
         'successes': 'Válidas', 'failures': 'Falhas', 'mean_runtime_s': 'Média (s)',
         'sample_std_runtime_s': 'DP amostral (s)', 'speedup': 'Speedup', 'relative_efficiency': 'Eficiência relativa'})
@@ -108,24 +111,28 @@ def plot_rows(df, output, environment):
         return
     plt.rcParams.update({'font.size': 10, 'axes.spines.top': False, 'axes.spines.right': False})
     environment = textwrap.fill(environment, width=85)
-    fig, ax = plt.subplots(figsize=(10, 5.5))
-    for approach, workers, label in [('pandas', 0, 'Pandas'), ('dask', 1, 'Dask 1 worker'), ('dask', 2, 'Dask 2 workers')]:
-        sub = df[(df.approach == approach) & (df.workers == workers) & (df.successes > 0)]
-        if approach == 'dask':
-            default_p = 16 if (sub.partitions == 16).any() else 4
-            sub = sub[sub.partitions == default_p]
-        sub = sub.sort_values('n')
-        if len(sub):
-            ax.errorbar(sub.n * 48 / 2**20, sub.mean_runtime_s,
-                        yerr=sub.sample_std_runtime_s.to_numpy(dtype=float), marker='o', capsize=4,
-                        label=label + ' (n=' + ','.join(str(x) for x in sub.successes) + ')')
-    ax.set(xlabel='Valores das duas entradas (MiB); arquivos e RSS são distintos',
-           ylabel='Runtime (s)', title=f'{environment}\nLeitura até materialização; barras = desvio padrão amostral')
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(output / 'volume-runtime.png', dpi=160)
-    plt.close(fig)
-    sub = df[(df.volume == 'medium') & (df.approach == 'dask') & (df.workers == 2) & (df.successes > 0)].sort_values('partitions')
+    # Mantemos uma figura por workload para nao sobrepor series no mesmo eixo.
+    workloads = sorted(df['workload'].dropna().unique()) if 'workload' in df.columns else ['merge']
+    for wl in workloads:
+        fig, ax = plt.subplots(figsize=(10, 5.5))
+        for approach, workers, label in [('pandas', 0, 'Pandas'), ('dask', 1, 'Dask 1 worker'), ('dask', 2, 'Dask 2 workers')]:
+            sub = df[(df.approach == approach) & (df.workers == workers) & (df.successes > 0) & (df.workload == wl)]
+            if approach == 'dask':
+                default_p = 16 if (sub.partitions == 16).any() else 4
+                sub = sub[sub.partitions == default_p]
+            sub = sub.sort_values('n')
+            if len(sub):
+                ax.errorbar(sub.n * 48 / 2**20, sub.mean_runtime_s,
+                            yerr=sub.sample_std_runtime_s.to_numpy(dtype=float), marker='o', capsize=4,
+                            label=label + ' (n=' + ','.join(str(x) for x in sub.successes) + ')')
+        ax.set(xlabel='Valores das duas entradas (MiB); arquivos e RSS são distintos',
+               ylabel='Runtime (s)', title=f'{environment}\nWorkload: {wl}; barras = desvio padrão amostral')
+        ax.legend()
+        fig.tight_layout()
+        suffix = '' if wl == 'merge' else f'-{wl}'
+        fig.savefig(output / f'volume-runtime{suffix}.png', dpi=160)
+        plt.close(fig)
+    sub = df[(df.volume == 'medium') & (df.approach == 'dask') & (df.workers == 2) & (df.successes > 0) & (df.workload == 'merge')].sort_values('partitions')
     if len(sub):
         fig, ax = plt.subplots(figsize=(9, 5))
         ax.errorbar(sub.partitions, sub.mean_runtime_s, yerr=sub.sample_std_runtime_s.to_numpy(dtype=float), marker='o', capsize=4)
